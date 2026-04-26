@@ -76,6 +76,23 @@ def edit_customer(original_customer_id: str = None, new_customer: Customer = Non
     cur.execute(""" SELECT c_current_addr_sk FROM customer WHERE c_customer_id=? """, (original_customer_id,))
 
     address_sk = cur.fetchone()[0]
+    if new_customer.address is not None:
+        street, city, state_zip = [part.strip() for part in new_customer.address.split(",", 2)]
+
+        street_parts = street.split(" ", 1)
+        street_number = street_parts[0]
+        street_name = street_parts[1] if len(street_parts) > 1 else ""
+
+        state_zip_parts = state_zip.split(" ", 1)
+        state = state_zip_parts[0]
+        zip_code = state_zip_parts[1] if len(state_zip_parts) > 1 else ""
+
+        cur.execute("""
+            UPDATE customer_address
+            SET ca_street_number = ?, ca_street_name = ?, ca_city = ?, ca_state = ?, ca_zip = ?
+            WHERE ca_address_sk = ?
+        """, (street_number, street_name, city, state, zip_code, address_sk))
+
 
     # sql set clauses
     updates = []
@@ -186,15 +203,98 @@ def get_filtered_items(filter_attributes: Item = None,
     """
     Returns a list of Item objects matching the filters.
     """
-    raise NotImplementedError("you must implement this function")
+    filter_attributes = filter_attributes or Item()
+    query="""SELECT i_item_id, i_product_name, i_brand, i_category, i_manufact, i_current_price, YEAR(i_rec_start_date), i_num_owned
+    FROM item"""
+    conds =[]
+    params = []
 
+    operator = "LIKE" if use_patterns else "="
+    filters = [
+        ("i_item_id", filter_attributes.item_id),
+        ("i_product_name", filter_attributes.product_name),
+        ("i_brand", filter_attributes.brand),
+        ("i_category", filter_attributes.category),
+        ("i_manufact", filter_attributes.manufact)]
+    for column, value in filters:
+        if value is not None:
+            conds.append(f"{column} {operator} ?")
+            params.append(value)
+    if min_price != -1:
+        conds.append("i_current_price >= ?")
+        params.append(min_price)
+    if max_price != -1:
+        conds.append("i_current_price <= ?")
+        params.append(max_price)
+    if min_start_year != -1:
+        conds.append("YEAR(i_rec_start_date) >= ?")
+        params.append(min_start_year)
+    if max_start_year != -1:
+        conds.append("YEAR(i_rec_start_date) <= ?")
+        params.append(max_start_year)
+    if conds:
+        query += " WHERE " + " AND ".join(conds)
+    cur.execute(query, tuple(params))
+
+    results=[]
+    for row in cur.fetchall():
+        results.append(Item(
+            item_id=row[0].strip() if row[0] else None,
+            product_name=row[1].strip() if row[1] else None,
+            brand=row[2].strip() if row[2] else None,
+            category=row[3].strip() if row[3] else None,
+            manufact=row[4].strip() if row[4] else None,
+            current_price=float(row[5]) if row[5] is not None else -1,
+            start_year=int(row[6]) if row[6] is not None else -1,
+            num_owned=row[7] if row[7] is not None else -1))
+    return results
 
 def get_filtered_customers(filter_attributes: Customer = None, use_patterns: bool = False) -> list[Customer]:
     """
     Returns a list of Customer objects matching the filters.
     """
-    raise NotImplementedError("you must implement this function")
+    filter_attributes= filter_attributes or Customer()
+    name="TRIM(CONCAT(TRIM(c.c_first_name), ' ', TRIM(c.c_last_name)))"
+    address=("TRIM(CONCAT(TRIM(ca.ca_street_number), ' ', TRIM(ca.ca_street_name), " "', ', TRIM(ca.ca_city), ', ', TRIM(ca.ca_state), ' ', TRIM(ca.ca_zip)))")
+    query= f"""
+        SELECT c.c_customer_id, c.c_first_name,c.c_last_name,c.c_email_address,ca.ca_street_number, ca.ca_street_name, ca.ca_city, ca.ca_state, ca.ca_zip
+        FROM customer c
+        JOIN customer_address ca ON c.c_current_addr_sk = ca.ca_address_sk"""
+    conds= []
+    params=[]
+    operator = "LIKE" if use_patterns else "="
 
+    if filter_attributes.customer_id is not None:
+        conds.append(f"c.c_customer_id {operator} ?")
+        params.append(filter_attributes.customer_id)
+    if filter_attributes.name is not None:
+        conds.append(f"{name} {operator} ?")
+        params.append(filter_attributes.name)
+    if filter_attributes.address is not None:
+        conds.append(f"{address} {operator} ?")
+        params.append(filter_attributes.address)
+    if filter_attributes.email is not None:
+        conds.append(f"c.c_email_address {operator} ?")
+        params.append(filter_attributes.email)
+    if conds:
+        query+=" WHERE " + " AND ".join(conds)
+
+    cur.execute(query, tuple(params))
+    results = []
+    for row in cur.fetchall():
+        full_name=f"{row[1].strip() if row[1] else ''} {row[2].strip() if row[2] else ''}".strip()
+        full_address = (
+            f"{row[4].strip() if row[4] else ''} {row[5].strip() if row[5] else ''}, "
+            f"{row[6].strip() if row[6] else ''}, "
+            f"{row[7].strip() if row[7] else ''} {row[8].strip() if row[8] else ''}"
+        ).strip()
+
+        results.append(Customer(
+            customer_id=row[0].strip() if row[0] else None,
+            name=full_name,
+            address=full_address,
+            email=row[3].strip() if row[3] else None,))
+    return results
 
 def get_filtered_rentals(filter_attributes: Rental = None,
                          min_rental_date: str = None,
@@ -204,7 +304,40 @@ def get_filtered_rentals(filter_attributes: Rental = None,
     """
     Returns a list of Rental objects matching the filters.
     """
-    raise NotImplementedError("you must implement this function")
+    filter_attributes = filter_attributes or Rental()
+    query="""SELECT item_id, customer_id, rental_date, due_date FROM rental"""
+    conds=[]
+    params=[]
+
+    if filter_attributes.item_id is not None:
+        conds.append("item_id = ?")
+        params.append(filter_attributes.item_id)
+    if filter_attributes.customer_id is not None:
+        conds.append("customer_id = ?")
+        params.append(filter_attributes.customer_id)
+    if min_rental_date is not None:
+        conds.append("rental_date >= ?")
+        params.append(min_rental_date)
+    if max_rental_date is not None:
+        conds.append("rental_date <= ?")
+        params.append(max_rental_date)
+    if min_due_date is not None:
+        conds.append("due_date >= ?")
+        params.append(min_due_date)
+    if max_due_date is not None:
+        conds.append("due_date <= ?")
+        params.append(max_due_date)
+    if conds:
+        query += " WHERE " + " AND ".join(conds)
+    cur.execute(query, tuple(params))
+
+    return [
+        Rental(
+            item_id=row[0].strip() if row[0] else None,
+            customer_id=row[1].strip() if row[1] else None,
+            rental_date=str(row[2]) if row[2] is not None else None,
+            due_date=str(row[3]) if row[3] is not None else None)
+        for row in cur.fetchall()]
 
 
 def get_filtered_rental_histories(filter_attributes: RentalHistory = None,
@@ -217,7 +350,47 @@ def get_filtered_rental_histories(filter_attributes: RentalHistory = None,
     """
     Returns a list of RentalHistory objects matching the filters.
     """
-    raise NotImplementedError("you must implement this function")
+    filter_attributes = filter_attributes or RentalHistory()
+    query = """SELECT item_id, customer_id, rental_date, due_date, return_date FROM rental_history"""
+    conds =[]
+    params=[]
+
+    if filter_attributes.item_id is not None:
+        conds.append("item_id = ?")
+        params.append(filter_attributes.item_id)
+    if filter_attributes.customer_id is not None:
+        conds.append("customer_id = ?")
+        params.append(filter_attributes.customer_id)
+    if min_rental_date is not None:
+        conds.append("rental_date >= ?")
+        params.append(min_rental_date)
+    if max_rental_date is not None:
+        conds.append("rental_date <= ?")
+        params.append(max_rental_date)
+    if min_due_date is not None:
+        conds.append("due_date >= ?")
+        params.append(min_due_date)
+    if max_due_date is not None:
+        conds.append("due_date <= ?")
+        params.append(max_due_date)
+    if min_return_date is not None:
+        conds.append("return_date >= ?")
+        params.append(min_return_date)
+    if max_return_date is not None:
+        conds.append("return_date <= ?")
+        params.append(max_return_date)
+    if conds:
+        query += " WHERE " + " AND ".join(conds)
+    cur.execute(query, tuple(params))
+
+    return [
+        RentalHistory(
+            item_id=row[0].strip() if row[0] else None,
+            customer_id=row[1].strip() if row[1] else None,
+            rental_date=str(row[2]) if row[2] is not None else None,
+            due_date=str(row[3]) if row[3] is not None else None,
+            return_date=str(row[4]) if row[4] is not None else None)
+        for row in cur.fetchall()]
 
 
 def get_filtered_waitlist(filter_attributes: Waitlist = None,
@@ -226,7 +399,31 @@ def get_filtered_waitlist(filter_attributes: Waitlist = None,
     """
     Returns a list of Waitlist objects matching the filters.
     """
-    raise NotImplementedError("you must implement this function")
+    filter_attributes = filter_attributes or Waitlist()
+    query ="""SELECT item_id, customer_id, place_in_line FROM waitlist"""
+    conds=[]
+    params =[]
+
+    if filter_attributes.item_id is not None:
+        conds.append("item_id = ?")
+        params.append(filter_attributes.item_id)
+    if filter_attributes.customer_id is not None:
+        conds.append("customer_id = ?")
+        params.append(filter_attributes.customer_id)
+    if min_place_in_line != -1:
+        conds.append("place_in_line >= ?")
+        params.append(min_place_in_line)
+    if max_place_in_line != -1:
+        conds.append("place_in_line <= ?")
+        params.append(max_place_in_line)
+    if conds:
+        query+= " WHERE " + " AND ".join(conds)
+    cur.execute(query, tuple(params))
+
+    return[
+        Waitlist(item_id=row[0].strip() if row[0] else None,customer_id=row[1].strip() if row[1] else None,
+            place_in_line=row[2] if row[2] is not None else -1)
+        for row in cur.fetchall()]
 
 
 def number_in_stock(item_id: str = None) -> int:
