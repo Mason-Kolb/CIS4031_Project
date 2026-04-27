@@ -203,23 +203,33 @@ def get_filtered_items(filter_attributes: Item = None,
     """
     Returns a list of Item objects matching the filters.
     """
+    #use an empty item if no filters were passed in
     filter_attributes = filter_attributes or Item()
+
+    #base query for item search
     query="""SELECT i_item_id, i_product_name, i_brand, i_category, i_manufact, i_current_price, YEAR(i_rec_start_date), i_num_owned
     FROM item"""
     conds =[]
     params = []
 
+    #use like if pattern matching is turned on
     operator = "LIKE" if use_patterns else "="
+
+    #string filters for item fields
     filters = [
         ("i_item_id", filter_attributes.item_id),
         ("i_product_name", filter_attributes.product_name),
         ("i_brand", filter_attributes.brand),
         ("i_category", filter_attributes.category),
         ("i_manufact", filter_attributes.manufact)]
+
+    #add each string filter that was actually filled in
     for column, value in filters:
         if value is not None:
             conds.append(f"{column} {operator} ?")
             params.append(value)
+
+    #add number filters if they were set
     if min_price != -1:
         conds.append("i_current_price >= ?")
         params.append(min_price)
@@ -232,11 +242,17 @@ def get_filtered_items(filter_attributes: Item = None,
     if max_start_year != -1:
         conds.append("YEAR(i_rec_start_date) <= ?")
         params.append(max_start_year)
+
+    #only add where if there is something to filter by
     if conds:
         query += " WHERE " + " AND ".join(conds)
+
+    #run the query with all filter values
     cur.execute(query, tuple(params))
 
     results=[]
+
+    #turn each row into an item object
     for row in cur.fetchall():
         results.append(Item(
             item_id=row[0].strip() if row[0] else None,
@@ -253,9 +269,14 @@ def get_filtered_customers(filter_attributes: Customer = None, use_patterns: boo
     """
     Returns a list of Customer objects matching the filters.
     """
+    #use an empty customer if no filters were passed in
     filter_attributes= filter_attributes or Customer()
+
+    #these rebuild full name and full address for searching
     name="TRIM(CONCAT(TRIM(c.c_first_name), ' ', TRIM(c.c_last_name)))"
     address=("TRIM(CONCAT(TRIM(ca.ca_street_number), ' ', TRIM(ca.ca_street_name), " "', ', TRIM(ca.ca_city), ', ', TRIM(ca.ca_state), ' ', TRIM(ca.ca_zip)))")
+
+    #join customer with address so we can search both
     query= f"""
         SELECT c.c_customer_id, c.c_first_name,c.c_last_name,c.c_email_address,ca.ca_street_number, ca.ca_street_name, ca.ca_city, ca.ca_state, ca.ca_zip
         FROM customer c
@@ -264,6 +285,7 @@ def get_filtered_customers(filter_attributes: Customer = None, use_patterns: boo
     params=[]
     operator = "LIKE" if use_patterns else "="
 
+    #add each filter only if it was filled in
     if filter_attributes.customer_id is not None:
         conds.append(f"c.c_customer_id {operator} ?")
         params.append(filter_attributes.customer_id)
@@ -276,11 +298,16 @@ def get_filtered_customers(filter_attributes: Customer = None, use_patterns: boo
     if filter_attributes.email is not None:
         conds.append(f"c.c_email_address {operator} ?")
         params.append(filter_attributes.email)
+
+    #only add where if there is something to filter by
     if conds:
         query+=" WHERE " + " AND ".join(conds)
 
+    #run the query with all filter values
     cur.execute(query, tuple(params))
     results = []
+
+    #rebuild each row into one customer object
     for row in cur.fetchall():
         full_name=f"{row[1].strip() if row[1] else ''} {row[2].strip() if row[2] else ''}".strip()
         full_address = (
@@ -304,11 +331,15 @@ def get_filtered_rentals(filter_attributes: Rental = None,
     """
     Returns a list of Rental objects matching the filters.
     """
+    #use an empty rental if no filters were passed in
     filter_attributes = filter_attributes or Rental()
+
+    #base query for rental search
     query="""SELECT item_id, customer_id, rental_date, due_date FROM rental"""
     conds=[]
     params=[]
 
+    #add id filters if they were filled in
     if filter_attributes.item_id is not None:
         conds.append("item_id = ?")
         params.append(filter_attributes.item_id)
@@ -327,10 +358,15 @@ def get_filtered_rentals(filter_attributes: Rental = None,
     if max_due_date is not None:
         conds.append("due_date <= ?")
         params.append(max_due_date)
+
+    #only add where if there is something to filter by
     if conds:
         query += " WHERE " + " AND ".join(conds)
+
+    #run the query with all filter values
     cur.execute(query, tuple(params))
 
+    #turn each row into a rental object
     return [
         Rental(
             item_id=row[0].strip() if row[0] else None,
@@ -350,11 +386,15 @@ def get_filtered_rental_histories(filter_attributes: RentalHistory = None,
     """
     Returns a list of RentalHistory objects matching the filters.
     """
+    #use an empty rental history if no filters were passed in
     filter_attributes = filter_attributes or RentalHistory()
+
+    #base query for rental history search
     query = """SELECT item_id, customer_id, rental_date, due_date, return_date FROM rental_history"""
     conds =[]
     params=[]
 
+    #add id filters if they were filled in
     if filter_attributes.item_id is not None:
         conds.append("item_id = ?")
         params.append(filter_attributes.item_id)
@@ -379,10 +419,15 @@ def get_filtered_rental_histories(filter_attributes: RentalHistory = None,
     if max_return_date is not None:
         conds.append("return_date <= ?")
         params.append(max_return_date)
+
+    #only add where if there is something to filter by
     if conds:
         query += " WHERE " + " AND ".join(conds)
+
+    #run the query with all filter values
     cur.execute(query, tuple(params))
 
+    #turn each row into a rental history object
     return [
         RentalHistory(
             item_id=row[0].strip() if row[0] else None,
@@ -399,11 +444,15 @@ def get_filtered_waitlist(filter_attributes: Waitlist = None,
     """
     Returns a list of Waitlist objects matching the filters.
     """
+    #use an empty waitlist object if no filters were passed in
     filter_attributes = filter_attributes or Waitlist()
+
+    #base query for waitlist search
     query ="""SELECT item_id, customer_id, place_in_line FROM waitlist"""
     conds=[]
     params =[]
 
+    #add id filters if they were filled in
     if filter_attributes.item_id is not None:
         conds.append("item_id = ?")
         params.append(filter_attributes.item_id)
@@ -416,10 +465,15 @@ def get_filtered_waitlist(filter_attributes: Waitlist = None,
     if max_place_in_line != -1:
         conds.append("place_in_line <= ?")
         params.append(max_place_in_line)
+
+    #only add where if there is something to filter by
     if conds:
         query+= " WHERE " + " AND ".join(conds)
+
+    #run the query with all filter values
     cur.execute(query, tuple(params))
 
+    #turn each row into a waitlist object
     return[
         Waitlist(item_id=row[0].strip() if row[0] else None,customer_id=row[1].strip() if row[1] else None,
             place_in_line=row[2] if row[2] is not None else -1)
