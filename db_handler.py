@@ -98,6 +98,7 @@ def edit_customer(original_customer_id: str = None, new_customer: Customer = Non
     updates = []
     # corresponding params for set clauses, in same order
     params = []
+    new_customer_id=None
 
     # update name if needed
     if new_customer.name is not None:
@@ -120,12 +121,17 @@ def edit_customer(original_customer_id: str = None, new_customer: Customer = Non
     if new_customer.customer_id is not None:
         updates.append("c_customer_id=?")
         params.append(new_customer.customer_id)
+        new_customer_id=new_customer.customer_id
     
     # exe only if there is something to update
     if len(updates) > 0:
         params.append(original_customer_id)
         cur.execute(f""" UPDATE customer SET {', '.join(updates)} WHERE c_customer_id=? """, tuple(params))
-
+    #update other tables so searches can be done with the new customer ID
+    if new_customer_id is not None and new_customer_id != original_customer_id:
+        cur.execute(""" UPDATE rental SET customer_id=? WHERE customer_id=? """,(new_customer_id, original_customer_id))
+        cur.execute(""" UPDATE rental_history SET customer_id=? WHERE customer_id=? """,(new_customer_id, original_customer_id))
+        cur.execute(""" UPDATE waitlist SET customer_id=? WHERE customer_id=? """,(new_customer_id, original_customer_id))
 
 def rent_item(item_id: str = None, customer_id: str = None):
     """
@@ -206,9 +212,19 @@ def get_filtered_items(filter_attributes: Item = None,
     #use an empty item if no filters were passed in
     filter_attributes = filter_attributes or Item()
 
-    #base query for item search
-    query="""SELECT i_item_id, i_product_name, i_brand, i_category, i_manufact, i_current_price, YEAR(i_rec_start_date), i_num_owned
-    FROM item"""
+    #query works with duplicate ids by selecting by most recent item id over an older one
+    query = """
+        SELECT i.i_item_id, i.i_product_name, i.i_brand, i.i_category, i.i_manufact,i.i_current_price,YEAR(i.i_rec_start_date),i.i_num_owned
+        FROM item i
+        JOIN(
+            SELECT i_item_id, MAX(i_rec_start_date) AS max_start_date
+            FROM item
+            GROUP BY i_item_id
+        )latest
+          ON i.i_item_id = latest.i_item_id
+         AND i.i_rec_start_date = latest.max_start_date
+    """
+
     conds =[]
     params = []
 
@@ -217,12 +233,12 @@ def get_filtered_items(filter_attributes: Item = None,
 
     #string filters for item fields
     filters = [
-        ("i_item_id", filter_attributes.item_id),
-        ("i_product_name", filter_attributes.product_name),
-        ("i_brand", filter_attributes.brand),
-        ("i_category", filter_attributes.category),
-        ("i_manufact", filter_attributes.manufact)]
-
+        ("i.i_item_id", filter_attributes.item_id),
+        ("i.i_product_name", filter_attributes.product_name),
+        ("i.i_brand", filter_attributes.brand),
+        ("i.i_category", filter_attributes.category),
+        ("i.i_manufact", filter_attributes.manufact)
+    ]
     #add each string filter that was actually filled in
     for column, value in filters:
         if value is not None:
@@ -231,16 +247,16 @@ def get_filtered_items(filter_attributes: Item = None,
 
     #add number filters if they were set
     if min_price != -1:
-        conds.append("i_current_price >= ?")
+        conds.append("i.i_current_price >= ?")
         params.append(min_price)
     if max_price != -1:
-        conds.append("i_current_price <= ?")
+        conds.append("i.i_current_price <= ?")
         params.append(max_price)
     if min_start_year != -1:
-        conds.append("YEAR(i_rec_start_date) >= ?")
+        conds.append("YEAR(i.i_rec_start_date) >= ?")
         params.append(min_start_year)
     if max_start_year != -1:
-        conds.append("YEAR(i_rec_start_date) <= ?")
+        conds.append("YEAR(i.i_rec_start_date) <= ?")
         params.append(max_start_year)
 
     #only add where if there is something to filter by
@@ -484,7 +500,20 @@ def number_in_stock(item_id: str = None) -> int:
     """
     Returns num_owned - active rentals. Returns -1 if item doesn't exist.
     """
-    cur.execute("SELECT i_num_owned FROM item WHERE i_item_id=? ", (item_id,))
+
+    #had to make this query match the filter once since some items in the table have the same ID so now this selects the most recent in the table
+    cur.execute("""
+        SELECT i.i_num_owned
+        FROM item i
+        JOIN (
+            SELECT i_item_id, MAX(i_rec_start_date) AS max_start_date
+            FROM item
+            GROUP BY i_item_id
+        ) latest
+          ON i.i_item_id = latest.i_item_id
+         AND i.i_rec_start_date = latest.max_start_date
+        WHERE i.i_item_id = ?
+    """, (item_id,))
     row=cur.fetchone()
     if row is None:
         return -1
